@@ -22,11 +22,12 @@ export async function fetchApi<T = unknown>(
 
   if (!response.ok) {
     let errorBody = '';
+    const textBody = await response.text();
     try {
-      const data = await response.json();
+      const data = JSON.parse(textBody);
       errorBody = data.detail || JSON.stringify(data);
     } catch {
-      errorBody = await response.text();
+      errorBody = textBody;
     }
     throw new Error(`API error: ${response.status} ${response.statusText} - ${errorBody}`);
   }
@@ -78,6 +79,9 @@ export function createApi(token?: string | null) {
 
     endMeeting: (meetingId: string) =>
       call<Meeting>(`/meetings/${meetingId}/end`, { method: 'PATCH' }),
+
+    deleteMeeting: (meetingId: string) =>
+      call(`/meetings/${meetingId}`, { method: 'DELETE' }),
   };
 }
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useAuth } from '@clerk/nextjs';
+import { useAuth, useUser } from '@clerk/nextjs';
 import { api, createApi } from '@/lib/api';
 import { Meeting } from '@/types';
 import { ArrowLeft } from 'lucide-react';
@@ -17,6 +17,7 @@ export default function MeetingPage() {
   const params = useParams();
   const router = useRouter();
   const { getToken } = useAuth();
+  const { user } = useUser();
   
   const [phase, setPhase] = useState<MeetingPhase>('loading');
   const [meeting, setMeeting] = useState<Meeting | null>(null);
@@ -55,8 +56,8 @@ export default function MeetingPage() {
     try {
       setJoining(true);
       setDisplayName(name);
-      
-      const isHost = name.toLowerCase() === 'minal' || name.toLowerCase() === meeting.host_name.toLowerCase();
+      const isUserHost = Boolean(user && meeting.host_clerk_id && user.id === meeting.host_clerk_id);
+      const isHost = isUserHost;
 
       const response = await api.joinMeeting(meeting.meeting_id, {
         display_name: name,
@@ -123,7 +124,8 @@ export default function MeetingPage() {
   }
 
   if (phase === 'active' && participantId) {
-    const isHost = displayName.toLowerCase() === 'minal' || displayName.toLowerCase() === meeting.host_name.toLowerCase();
+    const isUserHost = Boolean(user && meeting.host_clerk_id && user.id === meeting.host_clerk_id);
+    const isHost = isUserHost;
     return (
       <MeetingRoom 
         meeting={meeting}

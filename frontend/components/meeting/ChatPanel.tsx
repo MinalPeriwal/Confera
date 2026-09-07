@@ -12,10 +12,11 @@ interface ChatMessage {
 interface ChatPanelProps {
   onClose: () => void;
   localName: string;
+  messages: ChatMessage[];
+  onSendMessage: (text: string) => void;
 }
 
-export function ChatPanel({ onClose, localName }: ChatPanelProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+export function ChatPanel({ onClose, localName, messages, onSendMessage }: ChatPanelProps) {
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -31,15 +32,7 @@ export function ChatPanel({ onClose, localName }: ChatPanelProps) {
     e.preventDefault();
     if (!inputText.trim()) return;
 
-    const newMessage: ChatMessage = {
-      id: Date.now().toString(),
-      sender: localName,
-      text: inputText.trim(),
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      isLocal: true,
-    };
-
-    setMessages(prev => [...prev, newMessage]);
+    onSendMessage(inputText.trim());
     setInputText('');
   };
 

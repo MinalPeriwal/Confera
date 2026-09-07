@@ -3,11 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import models
 from .database import engine
 from .routers import health, meetings, websockets
-from dotenv import load_dotenv
 import os
+from dotenv import load_dotenv
 
-load_dotenv()
-
+# Load .env from the backend directory specifically
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(env_path)
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Zoom Clone API")

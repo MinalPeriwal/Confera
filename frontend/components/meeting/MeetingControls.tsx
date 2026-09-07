@@ -5,10 +5,12 @@ interface MeetingControlsProps {
   isMicOn: boolean;
   isCamOn: boolean;
   isScreenSharing: boolean;
+  isRecording: boolean;
   isHost: boolean;
   toggleMic: () => void;
   toggleCam: () => void;
   toggleScreenShare: () => void;
+  toggleRecording: () => void;
   activePanel: 'participants' | 'chat' | null;
   togglePanel: (panel: 'participants' | 'chat') => void;
   onLeave: () => void;
@@ -16,8 +18,8 @@ interface MeetingControlsProps {
 }
 
 export function MeetingControls({ 
-  isMicOn, isCamOn, isScreenSharing, isHost,
-  toggleMic, toggleCam, toggleScreenShare,
+  isMicOn, isCamOn, isScreenSharing, isRecording, isHost,
+  toggleMic, toggleCam, toggleScreenShare, toggleRecording,
   activePanel, togglePanel, onLeave, onEndForAll,
 }: MeetingControlsProps) {
   const [showLeaveMenu, setShowLeaveMenu] = useState(false);
@@ -91,6 +93,21 @@ export function MeetingControls({
           </button>
           <span className="text-[10px] sm:text-xs text-slate-400 mt-1 hidden sm:block">
             {isScreenSharing ? 'Stop Share' : 'Share Screen'}
+          </span>
+        </div>
+
+        {/* Local Recording */}
+        <div className="flex flex-col items-center">
+          <button 
+            onClick={toggleRecording}
+            className={`p-3 rounded-xl transition-colors ${isRecording ? 'bg-red-500/20 text-red-500 animate-pulse' : 'hover:bg-slate-800 text-slate-300'}`}
+          >
+            <div className={`w-5 h-5 sm:w-6 sm:h-6 rounded-full border-2 border-current flex items-center justify-center`}>
+              <div className={`rounded-full bg-current ${isRecording ? 'w-2 h-2' : 'w-2 h-2 rounded-full'}`} />
+            </div>
+          </button>
+          <span className="text-[10px] sm:text-xs text-slate-400 mt-1 hidden sm:block">
+            {isRecording ? 'Stop Recording' : 'Record'}
           </span>
         </div>
       </div>

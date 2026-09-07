@@ -33,8 +33,15 @@ const STATUS_CONFIG = {
   },
 };
 
+function parseUTC(dateString: string) {
+  if (!dateString.endsWith('Z') && !dateString.includes('+')) {
+    return new Date(dateString + 'Z');
+  }
+  return new Date(dateString);
+}
+
 function getTimeDisplay(meeting: Meeting) {
-  const ref = meeting.scheduled_at ? new Date(meeting.scheduled_at) : new Date(meeting.created_at);
+  const ref = meeting.scheduled_at ? parseUTC(meeting.scheduled_at) : parseUTC(meeting.created_at);
   const now = new Date();
   const diffMs = ref.getTime() - now.getTime();
   const diffMins = Math.round(diffMs / 60000);
@@ -44,7 +51,7 @@ function getTimeDisplay(meeting: Meeting) {
 
   if (meeting.status === 'active') return { primary: 'In progress', secondary: `Started at ${time}` };
   if (meeting.status === 'ended') {
-    const ago = new Date(meeting.created_at);
+    const ago = parseUTC(meeting.created_at);
     const agoMs = now.getTime() - ago.getTime();
     const agoHrs = Math.round(agoMs / 3600000);
     const agoLabel = agoHrs < 1 ? 'Less than an hour ago' : agoHrs < 24 ? `${agoHrs}h ago` : date;

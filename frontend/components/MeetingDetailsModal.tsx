@@ -17,7 +17,14 @@ export function MeetingDetailsModal({ isOpen, onClose, meeting, onJoin }: Meetin
 
   if (!isOpen || !meeting) return null;
 
-  const dateObj = meeting.scheduled_at ? new Date(meeting.scheduled_at) : new Date(meeting.created_at);
+  const parseUTC = (dateString: string) => {
+    if (!dateString.endsWith('Z') && !dateString.includes('+')) {
+      return new Date(dateString + 'Z');
+    }
+    return new Date(dateString);
+  };
+
+  const dateObj = meeting.scheduled_at ? parseUTC(meeting.scheduled_at) : parseUTC(meeting.created_at);
   const formattedDate = dateObj.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const formattedTime = dateObj.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 

@@ -78,6 +78,7 @@ class Meeting(MeetingBase):
     join_url: str
     status: str
     created_at: datetime
+    host_clerk_id: Optional[str] = None
     participants: List[Participant] = []
 
     class Config:

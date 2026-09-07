@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Meeting } from '@/types';
 import { useMediaStream } from '@/hooks/useMediaStream';
 import { useWebRTC } from '@/hooks/useWebRTC';
@@ -23,6 +23,30 @@ export function MeetingRoom({ meeting, media, participantId, clientId, displayNa
   const [activePanel, setActivePanel] = useState<'participants' | 'chat' | null>(null);
   // Local screen share stream (what we are sharing)
   const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
+  
+  // Local Recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+
+  const [chatMessages, setChatMessages] = useState<Array<{
+    id: string;
+    sender: string;
+    text: string;
+    timestamp: string;
+    isLocal: boolean;
+  }>>([]);
+
+  useEffect(() => {
+    return () => {
+      if (localScreenStream) {
+        localScreenStream.getTracks().forEach(track => track.stop());
+      }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.stop();
+      }
+    };
+  }, [localScreenStream]);
 
   const {
     remoteParticipants,
@@ -44,7 +68,27 @@ export function MeetingRoom({ meeting, media, participantId, clientId, displayNa
     isVideoEnabled: media.isVideoEnabled,
     onMeetingEnded: onLeave,
     onEndMeeting,
+    onChatMessage: (msg) => {
+      setChatMessages(prev => [...prev, { ...msg, id: Date.now().toString() + Math.random(), isLocal: false }]);
+    }
   });
+
+  const handleSendMessage = (text: string) => {
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    sendMessage({
+      type: 'chat_message',
+      sender: displayName,
+      text,
+      timestamp,
+    });
+    setChatMessages(prev => [...prev, {
+      id: Date.now().toString(),
+      sender: displayName,
+      text,
+      timestamp,
+      isLocal: true,
+    }]);
+  };
 
   const togglePanel = (panel: 'participants' | 'chat') => {
     setActivePanel(current => current === panel ? null : panel);
@@ -84,6 +128,54 @@ export function MeetingRoom({ meeting, media, participantId, clientId, displayNa
           media.stopScreenShare();
           setLocalScreenStream(null);
         });
+      }
+    }
+  };
+
+  const handleToggleRecording = async () => {
+    if (isRecording) {
+      mediaRecorderRef.current?.stop();
+      setIsRecording(false);
+    } else {
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        const mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+        
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            recordedChunksRef.current.push(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.style.display = 'none';
+          a.href = url;
+          a.download = `Meeting_Recording_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`;
+          document.body.appendChild(a);
+          a.click();
+          window.URL.revokeObjectURL(url);
+          recordedChunksRef.current = [];
+          setIsRecording(false);
+          // Stop all tracks so the browser stops showing the screen capture icon
+          stream.getTracks().forEach(t => t.stop());
+        };
+
+        recordedChunksRef.current = [];
+        mediaRecorder.start();
+        mediaRecorderRef.current = mediaRecorder;
+        setIsRecording(true);
+        
+        // Handle user stopping screen capture from browser UI
+        stream.getVideoTracks()[0]?.addEventListener('ended', () => {
+          if (mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+          }
+        });
+      } catch (err) {
+        console.error('Failed to start recording', err);
       }
     }
   };
@@ -137,6 +229,12 @@ export function MeetingRoom({ meeting, media, participantId, clientId, displayNa
           {remoteIsSharing && (
             <span className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-xs font-medium border border-blue-500/30 backdrop-blur">
               {screenShareState!.name} is sharing
+            </span>
+          )}
+          {isRecording && (
+            <span className="px-2 py-1 bg-red-500/20 text-red-400 rounded text-xs font-medium border border-red-500/30 animate-pulse flex items-center gap-1 backdrop-blur">
+              <div className="w-2 h-2 rounded-full bg-red-500"></div>
+              Recording...
             </span>
           )}
         </div>
@@ -247,10 +345,28 @@ export function MeetingRoom({ meeting, media, participantId, clientId, displayNa
 
       {/* Side Panels */}
       {activePanel === 'participants' && (
-        <ParticipantsPanel meetingId={meeting.meeting_id} isHost={isHost} onClose={() => setActivePanel(null)} />
+        <ParticipantsPanel 
+          meetingId={meeting.meeting_id} 
+          isHost={isHost} 
+          onClose={() => setActivePanel(null)} 
+          remoteParticipants={remoteParticipants}
+          localParticipant={{
+            id: participantId,
+            client_id: clientId,
+            display_name: `${displayName} (You)`,
+            is_host: isHost,
+            is_muted: !media.isAudioEnabled,
+            camera_enabled: media.isVideoEnabled
+          }}
+        />
       )}
       {activePanel === 'chat' && (
-        <ChatPanel onClose={() => setActivePanel(null)} localName={displayName} />
+        <ChatPanel 
+          onClose={() => setActivePanel(null)} 
+          localName={displayName} 
+          messages={chatMessages}
+          onSendMessage={handleSendMessage}
+        />
       )}
 
       {/* Bottom Controls */}
@@ -258,10 +374,12 @@ export function MeetingRoom({ meeting, media, participantId, clientId, displayNa
         isMicOn={media.isAudioEnabled}
         isCamOn={media.isVideoEnabled}
         isScreenSharing={isSharingLocally}
+        isRecording={isRecording}
         isHost={isHost}
         toggleMic={handleToggleMic}
         toggleCam={handleToggleCam}
         toggleScreenShare={handleToggleScreenShare}
+        toggleRecording={handleToggleRecording}
         activePanel={activePanel}
         togglePanel={togglePanel}
         onLeave={handleLeave}

@@ -24,6 +24,7 @@ export interface Meeting {
   description: string | null;
   host_id: number;
   host_name: string;
+  host_clerk_id?: string;
   scheduled_at: string | null;
   duration_minutes: number;
   join_url: string;

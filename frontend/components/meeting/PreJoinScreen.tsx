@@ -99,9 +99,11 @@ export function PreJoinScreen({ meeting, media, onJoin, onCancel, joining }: Pre
                   type="text"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-lg transition-all"
+                  disabled={!!user}
+                  className={`w-full px-4 py-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-lg transition-all ${user ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : 'bg-white'}`}
                   placeholder="Enter your name"
                 />
+                {user && <p className="text-xs text-blue-600 mt-2 font-medium">Using your authenticated name</p>}
               </div>
 
               <button 

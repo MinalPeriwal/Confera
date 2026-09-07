@@ -4,19 +4,11 @@ from datetime import datetime, timedelta
 
 def seed_db():
     models.Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
+    # For the Zoom clone, users are populated on-the-fly upon first login via Clerk (in auth.py).
+    # We no longer pre-seed a default user to prevent bypasses and hardcoded identity.
+    pass
     
-    default_email = "minal@example.com"
-    default_user = db.query(models.User).filter(models.User.email == default_email).first()
-    if not default_user:
-        default_user = models.User(name="Minal", email=default_email, is_active=True)
-        db.add(default_user)
-        db.commit()
-        print(f"Created default user: {default_email}")
-    else:
-        default_user.name = "Minal"
-        db.commit()
-        print("Default user already exists")
+    db = SessionLocal()
     
     if db.query(models.Meeting).count() == 0:
         import string, random

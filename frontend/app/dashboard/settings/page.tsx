@@ -1,22 +1,88 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { User, Camera, Mic, Monitor, Shield, Bell } from "lucide-react";
+import { useUser } from "@clerk/nextjs";
+
+function CameraPreview() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let stream: MediaStream | null = null;
+    
+    async function startCamera() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        console.error("Camera access denied", err);
+        setError(true);
+      }
+    }
+    
+    startCamera();
+    
+    return () => {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+
+  if (error) {
+    return (
+      <div className="bg-slate-900 rounded-xl aspect-video flex flex-col items-center justify-center text-red-500 mb-6 border border-slate-800">
+        <Camera className="w-10 h-10 mb-2 opacity-50" />
+        <span className="text-sm">Camera access denied</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-slate-900 rounded-xl aspect-video flex items-center justify-center text-slate-500 mb-6 overflow-hidden relative">
+      <video 
+        ref={videoRef} 
+        autoPlay 
+        playsInline 
+        muted 
+        className="w-full h-full object-cover transform -scale-x-100" 
+      />
+      <div className="absolute bottom-3 left-3 bg-black/50 text-white text-xs px-2 py-1 rounded backdrop-blur-sm">
+        Live Preview
+      </div>
+    </div>
+  );
+}
 
 export default function SettingsPage() {
+  const { user } = useUser();
   const [activeTab, setActiveTab] = useState<'profile' | 'video' | 'audio'>('profile');
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   
-  // Mock form state
+  // Real user form state (merged with mock settings)
   const [formData, setFormData] = useState({
-    displayName: "Minal",
-    email: "minal@example.com",
-    personalMeetingId: "485 574 916",
+    displayName: user?.fullName || "User",
+    email: user?.primaryEmailAddress?.emailAddress || "user@example.com",
+    personalMeetingId: "485 574 916", // Mock PMI for now
     cameraEnabled: true,
     micEnabled: false,
     blurBackground: false,
   });
+
+  // Update form data when user finishes loading
+  useEffect(() => {
+    if (user) {
+      setFormData(prev => ({
+        ...prev,
+        displayName: user.fullName || prev.displayName,
+        email: user.primaryEmailAddress?.emailAddress || prev.email,
+      }));
+    }
+  }, [user]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value, type, checked } = e.target;
@@ -139,10 +205,7 @@ export default function SettingsPage() {
               <div>
                 <h2 className="text-xl font-bold text-slate-800 border-b border-slate-100 pb-4 mb-6">Video Settings</h2>
                 
-                <div className="bg-slate-900 rounded-xl aspect-video flex items-center justify-center text-slate-500 mb-6">
-                  <Camera className="w-12 h-12 opacity-50 mb-2" />
-                  <span className="ml-2">Camera Preview</span>
-                </div>
+                <CameraPreview />
                 
                 <div className="space-y-4">
                   <label className="flex items-center justify-between p-4 border border-slate-200 rounded-xl hover:bg-slate-50 cursor-pointer">

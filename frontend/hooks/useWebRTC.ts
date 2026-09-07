@@ -21,6 +21,7 @@ interface UseWebRTCOptions {
   isVideoEnabled: boolean;
   onMeetingEnded?: () => void;
   onEndMeeting?: () => Promise<void>; // REST call to mark meeting ended in DB
+  onChatMessage?: (message: { sender: string; text: string; timestamp: string }) => void;
 }
 
 const ICE_SERVERS: RTCIceServer[] = [
@@ -47,6 +48,7 @@ export function useWebRTC({
   isVideoEnabled,
   onMeetingEnded,
   onEndMeeting,
+  onChatMessage,
 }: UseWebRTCOptions) {
   const [remoteParticipants, setRemoteParticipants] = useState<RemoteParticipant[]>([]);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
@@ -66,6 +68,8 @@ export function useWebRTC({
   onMeetingEndedRef.current = onMeetingEnded;
   const onEndMeetingRef = useRef(onEndMeeting);
   onEndMeetingRef.current = onEndMeeting;
+  const onChatMessageRef = useRef(onChatMessage);
+  onChatMessageRef.current = onChatMessage;
   const localStreamRef = useRef(localStream);
   localStreamRef.current = localStream;
 
@@ -303,6 +307,12 @@ export function useWebRTC({
 
         } else if (type === 'meeting_ended') {
           onMeetingEndedRef.current?.();
+        } else if (type === 'chat_message') {
+          onChatMessageRef.current?.({
+            sender: data.sender as string,
+            text: data.text as string,
+            timestamp: data.timestamp as string,
+          });
         }
       };
 

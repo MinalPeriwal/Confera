@@ -34,6 +34,10 @@ class Meeting(Base):
     host = relationship("User", back_populates="meetings")
     participants = relationship("Participant", back_populates="meeting", cascade="all, delete-orphan")
 
+    @property
+    def host_clerk_id(self):
+        return self.host.clerk_id if self.host else None
+
 class Participant(Base):
     __tablename__ = "participants"
     

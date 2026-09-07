@@ -23,43 +23,49 @@ export function useMediaStream() {
 
   const streamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
+  const initPromiseRef = useRef<Promise<void> | null>(null);
 
   const initializeMedia = useCallback(async () => {
-    try {
-      // Clean up existing stream if any
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
+    if (initPromiseRef.current) return initPromiseRef.current;
+
+    initPromiseRef.current = (async () => {
+      try {
+        // Clean up existing stream if any
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop());
+        }
+
+        const mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true,
+        });
+
+        streamRef.current = mediaStream;
+
+        setState(prev => ({
+          ...prev,
+          stream: mediaStream,
+          hasCameraPermission: true,
+          hasMicPermission: true,
+          isVideoEnabled: true,
+          isAudioEnabled: true,
+          error: null,
+        }));
+      } catch (err: any) {
+        console.warn('Media permission error:', err);
+        
+        setState(prev => ({
+          ...prev,
+          stream: null,
+          hasCameraPermission: false,
+          hasMicPermission: false,
+          isVideoEnabled: false,
+          isAudioEnabled: false,
+          error: 'Camera or Microphone access denied. You can still join the meeting.',
+        }));
       }
-
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      });
-
-      streamRef.current = mediaStream;
-
-      setState(prev => ({
-        ...prev,
-        stream: mediaStream,
-        hasCameraPermission: true,
-        hasMicPermission: true,
-        isVideoEnabled: true,
-        isAudioEnabled: true,
-        error: null,
-      }));
-    } catch (err: any) {
-      console.warn('Media permission error:', err);
-      
-      setState(prev => ({
-        ...prev,
-        stream: null,
-        hasCameraPermission: false,
-        hasMicPermission: false,
-        isVideoEnabled: false,
-        isAudioEnabled: false,
-        error: 'Camera or Microphone access denied. You can still join the meeting.',
-      }));
-    }
+    })();
+    return initPromiseRef.current;
   }, []);
 
   const toggleVideo = useCallback(() => {

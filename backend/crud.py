@@ -112,3 +112,11 @@ def mute_all_participants(db: Session, meeting_id: int):
         p.is_muted = True
     db.commit()
     return participants
+
+def delete_meeting(db: Session, meeting_id: str):
+    normalized_id = meeting_id.replace(" ", "")
+    db_meeting = db.query(models.Meeting).filter(models.Meeting.meeting_id == normalized_id).first()
+    if db_meeting:
+        db.delete(db_meeting)
+        db.commit()
+    return db_meeting

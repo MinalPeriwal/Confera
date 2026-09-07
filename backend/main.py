@@ -13,9 +13,12 @@ models.Base.metadata.create_all(bind=engine)
 app = FastAPI(title="Zoom Clone API")
 
 # Configure CORS
+# Read ALLOWED_ORIGINS from env, fallback to localhost:3000
+origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

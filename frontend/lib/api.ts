@@ -1,6 +1,6 @@
 import { Meeting, MeetingCreatePayload } from '../types';
 
-const API_BASE_URL = '';
+const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || '';
 
 export async function fetchApi<T = unknown>(
   endpoint: string,

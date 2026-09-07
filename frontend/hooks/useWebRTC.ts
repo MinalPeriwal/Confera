@@ -28,6 +28,14 @@ const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun1.l.google.com:19302' },
 ];
 
+if (process.env.NEXT_PUBLIC_TURN_URL) {
+  ICE_SERVERS.push({
+    urls: process.env.NEXT_PUBLIC_TURN_URL,
+    username: process.env.NEXT_PUBLIC_TURN_USERNAME,
+    credential: process.env.NEXT_PUBLIC_TURN_CREDENTIAL,
+  });
+}
+
 export function useWebRTC({
   meetingId,
   clientId,
@@ -214,8 +222,16 @@ export function useWebRTC({
 
     function connect() {
       if (unmountedRef.current || wsRef.current) return;
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${protocol}//${window.location.host}/ws/meetings/${meetingId}`);
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+      let wsUrl: string;
+      if (backendUrl) {
+        // e.g. https://api.confera.com -> wss://api.confera.com
+        wsUrl = backendUrl.replace(/^http/, 'ws') + `/ws/meetings/${meetingId}`;
+      } else {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        wsUrl = `${protocol}//${window.location.host}/ws/meetings/${meetingId}`;
+      }
+      const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
         setIsConnected(true);

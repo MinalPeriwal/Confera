@@ -229,8 +229,11 @@ export function useWebRTC({
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
       let wsUrl: string;
       if (backendUrl) {
-        // e.g. https://api.confera.com -> wss://api.confera.com
-        wsUrl = backendUrl.replace(/^http/, 'ws') + `/ws/meetings/${meetingId}`;
+        // Remove trailing slash if present
+        const cleanBackendUrl = backendUrl.replace(/\/$/, '');
+        // Force wss:// if the current page is HTTPS to prevent Mixed Content errors
+        const isHttps = window.location.protocol === 'https:';
+        wsUrl = cleanBackendUrl.replace(/^https?:\/\//, isHttps ? 'wss://' : 'ws://') + `/ws/meetings/${meetingId}`;
       } else {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         wsUrl = `${protocol}//${window.location.host}/ws/meetings/${meetingId}`;

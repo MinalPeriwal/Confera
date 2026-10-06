@@ -1,68 +1,54 @@
 import Link from "next/link";
-import { Video, Calendar, Shield, Users, MonitorPlay, MessageSquare, ChevronRight, Menu } from "lucide-react";
-import { SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
+import {
+  Video, Calendar, Shield, Users, MonitorPlay, MessageSquare, ChevronRight, Check, GraduationCap, Briefcase, LifeBuoy,
+} from "lucide-react";
 import { auth } from "@clerk/nextjs/server";
+import { SiteNav } from "@/components/site/SiteNav";
+import { SiteFooter } from "@/components/site/SiteFooter";
+
+const FEATURES = [
+  {
+    icon: Video, tint: "bg-blue-100 text-blue-600", title: "HD Video & Audio",
+    body: "Sharp 720p video with echo cancellation and noise suppression, plus background blur, for distraction-free meetings.",
+  },
+  {
+    icon: MonitorPlay, tint: "bg-indigo-100 text-indigo-600", title: "Screen Sharing",
+    body: "Share your entire screen, a window or a browser tab. Everyone sees it on the main stage.",
+  },
+  {
+    icon: Shield, tint: "bg-emerald-100 text-emerald-600", title: "Secure by Design",
+    body: "Media is encrypted in transit and flows directly between participants. Waiting room, passcode, meeting lock and co-hosts keep you in control.",
+  },
+  {
+    icon: MessageSquare, tint: "bg-purple-100 text-purple-600", title: "Real-time Chat",
+    body: "Message everyone or one person privately, share files up to 10 MB, and catch up on messages when you join late.",
+  },
+  {
+    icon: Calendar, tint: "bg-rose-100 text-rose-600", title: "Easy Scheduling",
+    body: "Start an instant meeting with a unique ID and shareable link, or schedule one in advance from your dashboard.",
+  },
+  {
+    icon: Users, tint: "bg-amber-100 text-amber-600", title: "Built for Small Groups",
+    body: "Meet with up to about 8 people in a dynamic grid, with pinning, speaker view, raised hands and reactions.",
+  },
+];
+
+const SOLUTIONS = [
+  { icon: Briefcase, title: "Teams & remote work", body: "Stand-ups, reviews and one-to-ones with screen sharing and chat in one place." },
+  { icon: GraduationCap, title: "Classes & tutoring", body: "A waiting room, raised hands and co-hosts to keep a session organised." },
+  { icon: LifeBuoy, title: "Interviews & support calls", body: "Send a link and talk: guests join from any browser without creating an account." },
+];
 
 export default async function LandingPage() {
   const { userId } = await auth();
-  
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-      {/* Top Navigation */}
-      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center gap-8">
-              <Link href="/" className="flex items-center gap-2 group">
-                <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <Video className="w-5 h-5 text-white" />
-                </div>
-                <span className="font-bold text-xl text-slate-900 tracking-tight">Confera</span>
-              </Link>
-              
-              <nav className="hidden md:flex space-x-8">
-                <Link href="/" className="text-slate-600 hover:text-slate-900 font-medium text-sm transition-colors">Products</Link>
-                <Link href="/" className="text-slate-600 hover:text-slate-900 font-medium text-sm transition-colors">Solutions</Link>
-                <Link href="/" className="text-slate-600 hover:text-slate-900 font-medium text-sm transition-colors">Resources</Link>
-                <Link href="/" className="text-slate-600 hover:text-slate-900 font-medium text-sm transition-colors">Pricing</Link>
-              </nav>
-            </div>
+      <SiteNav signedIn={!!userId} />
 
-            <div className="hidden md:flex items-center gap-4">
-              {!userId ? (
-                <>
-                  <SignInButton mode="modal">
-                    <button className="text-slate-600 hover:text-blue-600 font-medium text-sm transition-colors">
-                      Sign In
-                    </button>
-                  </SignInButton>
-                  <SignUpButton mode="modal">
-                    <button className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-full text-sm font-medium transition-all hover:shadow-lg hover:shadow-blue-600/20 active:scale-95">
-                      Get Started
-                    </button>
-                  </SignUpButton>
-                </>
-              ) : (
-                <>
-                  <Link href="/dashboard" className="text-slate-600 hover:text-blue-600 font-medium text-sm transition-colors mr-2">
-                    Dashboard
-                  </Link>
-                  <UserButton />
-                </>
-              )}
-            </div>
-            
-            <button className="md:hidden text-slate-600">
-              <Menu className="w-6 h-6" />
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* Hero Section */}
       <main className="flex-1">
+        {/* Hero */}
         <section className="relative overflow-hidden bg-white pt-20 pb-32">
-          {/* Background decorative elements */}
           <div className="absolute top-0 right-0 -translate-y-12 translate-x-1/3">
             <div className="w-96 h-96 bg-blue-100/50 rounded-full blur-3xl" />
           </div>
@@ -73,15 +59,12 @@ export default async function LandingPage() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 text-center">
             <h1 className="text-5xl md:text-7xl font-extrabold text-slate-900 tracking-tight mb-8 leading-tight">
               One platform to <br className="hidden md:block" />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">
-                connect your team
-              </span>
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">connect your team</span>
             </h1>
             <p className="mt-4 max-w-2xl text-xl text-slate-600 mx-auto mb-10 leading-relaxed">
-              Bring your team together, wherever they are. Professional HD video, 
-              crystal clear audio, and seamless collaboration built for the modern workforce.
+              Bring your team together, wherever they are. Clear video, crisp audio and simple collaboration, with a link anyone can open.
             </p>
-            
+
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
               <Link href="/dashboard" className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-full text-lg font-medium transition-all hover:shadow-xl hover:shadow-blue-600/30 flex items-center justify-center gap-2 group">
                 <Video className="w-5 h-5" />
@@ -92,118 +75,86 @@ export default async function LandingPage() {
                 Join Meeting
               </Link>
             </div>
-            <p className="mt-6 text-sm text-slate-500">Free forever. No credit card required.</p>
-            
-            {/* Hero Image Mockup */}
+            <p className="mt-6 text-sm text-slate-500">Free to use. No credit card required.</p>
+
             <div className="mt-20 max-w-5xl mx-auto relative rounded-2xl overflow-hidden shadow-2xl border border-slate-200/50 bg-slate-900 aspect-video flex items-center justify-center">
-               <div className="absolute inset-0 bg-gradient-to-br from-slate-800 to-slate-950" />
-               <div className="relative text-center">
-                 <Video className="w-20 h-20 text-blue-500 mx-auto mb-6 opacity-80" />
-                 <h3 className="text-2xl font-medium text-white mb-2">High Quality Video Conferencing</h3>
-                 <p className="text-slate-400">Join instantly from any device</p>
-               </div>
+              <div className="absolute inset-0 bg-gradient-to-br from-slate-800 to-slate-950" />
+              <div className="relative text-center">
+                <Video className="w-20 h-20 text-blue-500 mx-auto mb-6 opacity-80" />
+                <h3 className="text-2xl font-medium text-white mb-2">High Quality Video Conferencing</h3>
+                <p className="text-slate-400">Join instantly from any device</p>
+              </div>
             </div>
           </div>
         </section>
 
-        {/* Features Section */}
-        <section className="py-24 bg-slate-50">
+        {/* Products / features */}
+        <section id="features" className="py-24 bg-slate-50 scroll-mt-16">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="text-center mb-16">
               <h2 className="text-3xl font-bold text-slate-900">Everything you need for perfect meetings</h2>
-              <p className="mt-4 text-lg text-slate-600">Built for performance, reliability, and ease of use.</p>
+              <p className="mt-4 text-lg text-slate-600">Built for reliability and ease of use.</p>
             </div>
-
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-              {/* Feature 1 */}
-              <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow">
-                <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center mb-6">
-                  <Video className="w-6 h-6 text-blue-600" />
+              {FEATURES.map(({ icon: Icon, tint, title, body }) => (
+                <div key={title} className="bg-white p-8 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow">
+                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-6 ${tint}`}>
+                    <Icon className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-900 mb-3">{title}</h3>
+                  <p className="text-slate-600 leading-relaxed">{body}</p>
                 </div>
-                <h3 className="text-xl font-bold text-slate-900 mb-3">HD Video & Audio</h3>
-                <p className="text-slate-600 leading-relaxed">
-                  Experience crystal clear 1080p video and background noise suppression for distraction-free meetings.
-                </p>
-              </div>
+              ))}
+            </div>
+          </div>
+        </section>
 
-              {/* Feature 2 */}
-              <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow">
-                <div className="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center mb-6">
-                  <MonitorPlay className="w-6 h-6 text-indigo-600" />
+        {/* Solutions */}
+        <section id="solutions" className="py-24 bg-white scroll-mt-16">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="text-center mb-16">
+              <h2 className="text-3xl font-bold text-slate-900">Made for the way you meet</h2>
+              <p className="mt-4 text-lg text-slate-600">From daily stand-ups to a first interview.</p>
+            </div>
+            <div className="grid md:grid-cols-3 gap-8">
+              {SOLUTIONS.map(({ icon: Icon, title, body }) => (
+                <div key={title} className="p-8 rounded-2xl border border-slate-200 bg-slate-50">
+                  <Icon className="w-8 h-8 text-blue-600 mb-5" />
+                  <h3 className="text-xl font-bold text-slate-900 mb-2">{title}</h3>
+                  <p className="text-slate-600 leading-relaxed">{body}</p>
                 </div>
-                <h3 className="text-xl font-bold text-slate-900 mb-3">Screen Sharing</h3>
-                <p className="text-slate-600 leading-relaxed">
-                  Share your entire screen, a specific window, or a tab with uncompromised quality and frame rates.
-                </p>
-              </div>
+              ))}
+            </div>
+          </div>
+        </section>
 
-              {/* Feature 3 */}
-              <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow">
-                <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center mb-6">
-                  <Shield className="w-6 h-6 text-emerald-600" />
-                </div>
-                <h3 className="text-xl font-bold text-slate-900 mb-3">Secure by Design</h3>
-                <p className="text-slate-600 leading-relaxed">
-                  End-to-end encryption ensures your meetings stay private. Wait rooms and host controls included.
-                </p>
+        {/* Pricing */}
+        <section id="pricing" className="py-24 bg-slate-50 scroll-mt-16">
+          <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+            <h2 className="text-3xl font-bold text-slate-900">Simple pricing</h2>
+            <p className="mt-4 text-lg text-slate-600">Everything on this page is included.</p>
+            <div className="mt-10 bg-white rounded-3xl border border-slate-200 shadow-sm p-10 text-left">
+              <div className="flex items-baseline gap-2">
+                <span className="text-5xl font-extrabold text-slate-900">Free</span>
+                <span className="text-slate-500">no credit card</span>
               </div>
-
-              {/* Feature 4 */}
-              <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow">
-                <div className="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center mb-6">
-                  <MessageSquare className="w-6 h-6 text-purple-600" />
-                </div>
-                <h3 className="text-xl font-bold text-slate-900 mb-3">Real-time Chat</h3>
-                <p className="text-slate-600 leading-relaxed">
-                  Share links, files, and messages instantly with all participants or in private 1-on-1 channels.
-                </p>
-              </div>
-
-              {/* Feature 5 */}
-              <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow">
-                <div className="w-12 h-12 bg-rose-100 rounded-xl flex items-center justify-center mb-6">
-                  <Calendar className="w-6 h-6 text-rose-600" />
-                </div>
-                <h3 className="text-xl font-bold text-slate-900 mb-3">Easy Scheduling</h3>
-                <p className="text-slate-600 leading-relaxed">
-                  Generate unique meeting IDs instantly or schedule in advance with automatic calendar invites.
-                </p>
-              </div>
-
-              {/* Feature 6 */}
-              <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow">
-                <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center mb-6">
-                  <Users className="w-6 h-6 text-amber-600" />
-                </div>
-                <h3 className="text-xl font-bold text-slate-900 mb-3">Large Gatherings</h3>
-                <p className="text-slate-600 leading-relaxed">
-                  Host up to 100 interactive video participants seamlessly with dynamic grid layouts.
-                </p>
-              </div>
+              <ul className="mt-8 grid sm:grid-cols-2 gap-3 text-slate-700">
+                {[
+                  "Unlimited meetings", "Screen sharing", "Waiting room & passcodes", "Chat & file sharing",
+                  "Raise hand & reactions", "Live captions & background blur", "Guests join without an account", "Up to ~8 people per meeting",
+                ].map((item) => (
+                  <li key={item} className="flex items-start gap-2"><Check className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />{item}</li>
+                ))}
+              </ul>
+              <Link href="/dashboard" className="mt-10 inline-flex w-full sm:w-auto justify-center items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-8 py-3.5 rounded-full font-medium transition-colors">
+                Start a meeting <ChevronRight className="w-4 h-4" />
+              </Link>
             </div>
           </div>
         </section>
       </main>
 
-      {/* Footer */}
-      <footer className="bg-white border-t border-slate-200 py-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col md:flex-row justify-between items-center gap-6">
-            <div className="flex items-center gap-2">
-              <Video className="w-5 h-5 text-blue-600" />
-              <span className="font-bold text-lg text-slate-900">Confera</span>
-            </div>
-            <p className="text-slate-500 text-sm">
-              © {new Date().getFullYear()} Confera Inc. All rights reserved.
-            </p>
-            <div className="flex gap-6">
-              <Link href="/" className="text-slate-400 hover:text-slate-600 transition-colors">Privacy</Link>
-              <Link href="/" className="text-slate-400 hover:text-slate-600 transition-colors">Terms</Link>
-              <Link href="/" className="text-slate-400 hover:text-slate-600 transition-colors">Status</Link>
-            </div>
-          </div>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

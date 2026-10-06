@@ -22,6 +22,18 @@ export function TopBar() {
   const [isLoadingMeetings, setIsLoadingMeetings] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
 
+  // Notifications bell
+  const [bellOpen, setBellOpen] = useState(false);
+  const bellRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!bellOpen) return;
+    const onDown = (e: MouseEvent) => { if (bellRef.current && !bellRef.current.contains(e.target as Node)) setBellOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setBellOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [bellOpen]);
+
   useEffect(() => {
     fetchApi('/health')
       .then((data: unknown) => setHealthStatus((data as { status: string }).status === 'ok'))
@@ -169,10 +181,23 @@ export function TopBar() {
           <div className={`w-2 h-2 rounded-full ${healthStatus ? 'bg-green-500' : 'bg-red-500'}`} />
         </div>
 
-        <button className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors relative">
-          <Bell className="w-5 h-5" />
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-blue-600 rounded-full border-2 border-white"></span>
-        </button>
+        <div className="relative" ref={bellRef}>
+          <button
+            onClick={() => setBellOpen(v => !v)}
+            aria-label="Notifications"
+            aria-expanded={bellOpen}
+            className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors relative"
+          >
+            <Bell className="w-5 h-5" />
+          </button>
+          {bellOpen && (
+            <div className="absolute right-0 mt-2 w-72 bg-white border border-slate-200 rounded-xl shadow-xl z-50 p-5 text-center" role="dialog" aria-label="Notifications">
+              <Bell className="w-6 h-6 text-slate-300 mx-auto mb-2" />
+              <p className="text-sm font-medium text-slate-700">You&apos;re all caught up</p>
+              <p className="text-xs text-slate-500 mt-1">Meeting reminders and invites will show up here.</p>
+            </div>
+          )}
+        </div>
 
         <Link href="/dashboard/settings" className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors hidden sm:block">
           <Settings className="w-5 h-5" />

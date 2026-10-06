@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { startBackgroundBlur, BlurPipeline } from '@/lib/backgroundBlur';
+import { readPrefs, writePrefs, MeetingPrefs } from '@/lib/prefs';
 
 export type MediaStatus = 'idle' | 'requesting' | 'ready' | 'unavailable';
 
@@ -41,15 +42,7 @@ const INITIAL_STATE: MediaState = {
   blur: 'off',
 };
 
-const PREFS_KEY = 'confera:devices';
-type Prefs = { cameraId?: string; micId?: string; speakerId?: string; blur?: boolean };
-
-function readPrefs(): Prefs {
-  try { return JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'); } catch { return {}; }
-}
-function writePrefs(patch: Prefs) {
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...readPrefs(), ...patch })); } catch { /* storage unavailable */ }
-}
+type Prefs = MeetingPrefs;
 
 function describeMediaError(err: unknown): string {
   const name = (err as { name?: string })?.name;
@@ -168,13 +161,16 @@ export function useMediaStream() {
       watchTracks(stream);
       const hasCamera = stream.getVideoTracks().length > 0;
       const hasMic = stream.getAudioTracks().length > 0;
+      // Honour the "join muted" / "join with camera off" preferences from Settings
+      if (prefs.joinMuted) stream.getAudioTracks().forEach(t => { t.enabled = false; });
+      if (prefs.joinCameraOff) stream.getVideoTracks().forEach(t => { t.enabled = false; });
       setState({
         stream,
         status: 'ready',
         hasCamera,
         hasMic,
-        isVideoEnabled: hasCamera,
-        isAudioEnabled: hasMic,
+        isVideoEnabled: hasCamera && !prefs.joinCameraOff,
+        isAudioEnabled: hasMic && !prefs.joinMuted,
         error: hasCamera && hasMic
           ? null
           : hasMic

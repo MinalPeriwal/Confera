@@ -29,10 +29,17 @@ class Meeting(Base):
     duration_minutes = Column(Integer, default=60)
     join_url = Column(String)
     status = Column(String, default="scheduled")
+    passcode_hash = Column(String, nullable=True)
+    waiting_room = Column(Boolean, default=False, nullable=False, server_default="0")
+    locked = Column(Boolean, default=False, nullable=False, server_default="0")
     created_at = Column(DateTime, server_default=func.now())
 
     host = relationship("User", back_populates="meetings")
     participants = relationship("Participant", back_populates="meeting", cascade="all, delete-orphan")
+
+    @property
+    def has_passcode(self):
+        return bool(self.passcode_hash)
 
     @property
     def host_clerk_id(self):
@@ -49,5 +56,7 @@ class Participant(Base):
     is_host = Column(Boolean, default=False)
     is_muted = Column(Boolean, default=False)
     camera_enabled = Column(Boolean, default=False)
+    admitted = Column(Boolean, default=False, nullable=False, server_default="0")
+    is_cohost = Column(Boolean, default=False, nullable=False, server_default="0")
 
     meeting = relationship("Meeting", back_populates="participants")

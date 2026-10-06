@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
+import { parseMeetingId } from '@/lib/links';
 
 interface JoinMeetingModalProps {
   isOpen: boolean;
@@ -16,12 +17,12 @@ export function JoinMeetingModal({ isOpen, onClose, onJoin }: JoinMeetingModalPr
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
     if (!meetingId.trim()) {
-      setError('Meeting ID is required');
+      setError('Meeting ID or link is required');
       return;
     }
-    const normalized = meetingId.replace(/\s/g, '');
-    if (!/^\d+$/.test(normalized)) {
-      setError('Please enter a valid numeric Meeting ID');
+    const normalized = parseMeetingId(meetingId);
+    if (!normalized) {
+      setError('Enter a valid Meeting ID or paste the full meeting link');
       return;
     }
     setError('');
@@ -41,7 +42,7 @@ export function JoinMeetingModal({ isOpen, onClose, onJoin }: JoinMeetingModalPr
         <form onSubmit={handleJoin} className="p-6">
           <div className="mb-6">
             <label className="block text-sm font-medium text-slate-700 mb-2">
-              Meeting ID or Personal Link Name
+              Meeting ID or invite link
             </label>
             <input 
               type="text"

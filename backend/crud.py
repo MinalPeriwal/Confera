@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 from . import models, schemas
+from .security import hash_passcode
 import random
 import string
 from datetime import datetime, timezone
@@ -44,7 +45,9 @@ def create_meeting(db: Session, meeting: schemas.MeetingCreate, host_id: int):
         scheduled_at=meeting.scheduled_at,
         duration_minutes=meeting.duration_minutes,
         join_url=join_url,
-        status=status
+        status=status,
+        waiting_room=meeting.waiting_room,
+        passcode_hash=hash_passcode(meeting.passcode) if meeting.passcode else None,
     )
     db.add(db_meeting)
     db.commit()
@@ -71,11 +74,12 @@ def get_recent_meetings(db: Session, user_id: int, limit: int = 10):
         models.Meeting.status.in_(["active", "ended"])
     ).order_by(models.Meeting.created_at.desc()).limit(limit).all()
 
-def create_participant(db: Session, meeting_id: int, participant: schemas.ParticipantCreate):
+def create_participant(db: Session, meeting_id: int, participant: schemas.ParticipantCreate, admitted: bool = True):
     db_participant = models.Participant(
         meeting_id=meeting_id,
         display_name=participant.display_name,
-        is_host=participant.is_host
+        is_host=participant.is_host,
+        admitted=admitted,
     )
     db.add(db_participant)
     db.commit()

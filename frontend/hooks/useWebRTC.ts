@@ -1,388 +1,614 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { api, getMeetingSocketUrl } from '@/lib/api';
 
 export interface RemoteParticipant {
-  id: string | number;
-  client_id: string;
+  id: number | string | null; // database participant id
+  client_id: string; // per-page-load WebRTC/WebSocket identity
   display_name: string;
   is_host: boolean;
+  is_cohost?: boolean;
   is_muted: boolean;
   camera_enabled: boolean;
   is_screen_sharing?: boolean;
+  hand_raised?: boolean;
 }
+
+export interface ChatEvent {
+  id: string;
+  from: string;
+  sender: string;
+  text: string;
+  timestamp: string;
+  private?: boolean;
+  to?: string;
+  attachment?: { name: string; size: number; url: string } | null;
+}
+
+export interface RoomState {
+  locked: boolean;
+  waiting_room: boolean;
+}
+
+export interface WaitingGuest {
+  client_id: string;
+  display_name: string;
+}
+
+export type EndReason = 'ended' | 'removed' | 'not_found' | 'denied' | 'unauthorized';
+export type ConnectionStatus = 'connecting' | 'waiting' | 'connected' | 'reconnecting';
 
 interface UseWebRTCOptions {
   meetingId: string;
   clientId: string;
-  participantId: number;
-  displayName: string;
-  isHost: boolean;
+  /** Signed join credential from the REST join call: carries our identity and role. */
+  ticket: string;
   localStream: MediaStream | null;
   isAudioEnabled: boolean;
   isVideoEnabled: boolean;
-  onMeetingEnded?: () => void;
-  onEndMeeting?: () => Promise<void>; // REST call to mark meeting ended in DB
-  onChatMessage?: (message: { sender: string; text: string; timestamp: string }) => void;
+  onMeetingEnded?: (reason: EndReason) => void;
+  onChatMessage?: (message: ChatEvent) => void;
+  onChatHistory?: (messages: ChatEvent[]) => void;
+  onReaction?: (clientId: string, emoji: string) => void;
+  onCaption?: (clientId: string, sender: string, text: string, final: boolean) => void;
+  onForceMute?: () => void;
+  onWaitingGuest?: (guest: WaitingGuest) => void;
 }
 
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-];
+// Close codes sent by the backend (see backend/connection_manager.py)
+const CLOSE_UNAUTHORIZED = 4401;
+const CLOSE_REMOVED = 4403;
+const CLOSE_NOT_FOUND = 4404;
+const CLOSE_DENIED = 4405;
+const CLOSE_ENDED = 4410;
 
-if (process.env.NEXT_PUBLIC_TURN_URL) {
-  ICE_SERVERS.push({
-    urls: process.env.NEXT_PUBLIC_TURN_URL,
-    username: process.env.NEXT_PUBLIC_TURN_USERNAME,
-    credential: process.env.NEXT_PUBLIC_TURN_CREDENTIAL,
-  });
+const PING_INTERVAL_MS = 15_000;
+const STALE_AFTER_MS = 40_000;
+const MAX_BACKOFF_MS = 8_000;
+
+function fallbackIceServers(): RTCIceServer[] {
+  const servers: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+  if (process.env.NEXT_PUBLIC_TURN_URL) {
+    servers.push({
+      urls: process.env.NEXT_PUBLIC_TURN_URL.split(','),
+      username: process.env.NEXT_PUBLIC_TURN_USERNAME,
+      credential: process.env.NEXT_PUBLIC_TURN_CREDENTIAL,
+    });
+  }
+  return servers;
+}
+
+async function loadIceServers(): Promise<RTCIceServer[]> {
+  try {
+    const result = await Promise.race([
+      api.getIceServers(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('ICE config timeout')), 5000)),
+    ]);
+    if (result.iceServers?.length) return result.iceServers;
+  } catch (err) {
+    console.warn('Falling back to default ICE servers', err);
+  }
+  return fallbackIceServers();
+}
+
+interface Peer {
+  id: string;
+  pc: RTCPeerConnection;
+  /** Polite peer rolls back on offer collision ("perfect negotiation"). */
+  polite: boolean;
+  makingOffer: boolean;
+  ignoreOffer: boolean;
+  pendingCandidates: RTCIceCandidateInit[];
+  /** Serializes async signaling work per peer so handlers never interleave. */
+  chain: Promise<void>;
+  remoteStream: MediaStream;
+  disconnectTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export function useWebRTC({
   meetingId,
   clientId,
-  participantId,
-  displayName,
-  isHost,
+  ticket,
   localStream,
   isAudioEnabled,
   isVideoEnabled,
   onMeetingEnded,
-  onEndMeeting,
   onChatMessage,
+  onChatHistory,
+  onReaction,
+  onCaption,
+  onForceMute,
+  onWaitingGuest,
 }: UseWebRTCOptions) {
   const [remoteParticipants, setRemoteParticipants] = useState<RemoteParticipant[]>([]);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
-  // screen_client_id of whoever is sharing, plus their stream
-  const [screenShareState, setScreenShareState] = useState<{
-    clientId: string;
-    name: string;
-    stream: MediaStream;
-  } | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
+  const [status, setStatus] = useState<ConnectionStatus>('connecting');
+  const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
+  const [roomState, setRoomState] = useState<RoomState>({ locked: false, waiting_room: false });
+  const [waitingList, setWaitingList] = useState<WaitingGuest[]>([]);
+  const [self, setSelf] = useState({ is_host: false, is_cohost: false });
+  const [handRaised, setHandRaisedState] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
-  const screenSendersRef = useRef<Map<string, RTCRtpSender>>(new Map()); // peerId -> sender holding video track
-  const unmountedRef = useRef(false);
-  const onMeetingEndedRef = useRef(onMeetingEnded);
-  onMeetingEndedRef.current = onMeetingEnded;
-  const onEndMeetingRef = useRef(onEndMeeting);
-  onEndMeetingRef.current = onEndMeeting;
-  const onChatMessageRef = useRef(onChatMessage);
-  onChatMessageRef.current = onChatMessage;
-  const localStreamRef = useRef(localStream);
-  localStreamRef.current = localStream;
+  const peersRef = useRef<Map<string, Peer>>(new Map());
+  const iceServersRef = useRef<RTCIceServer[]>(fallbackIceServers());
+  const screenTrackRef = useRef<MediaStreamTrack | null>(null);
 
-  // ─── Helpers ─────────────────────────────────────────────────────────────────
+  // Latest values for use inside long-lived callbacks (socket handlers etc.)
+  const latest = useRef({ isAudioEnabled, isVideoEnabled, localStream });
+  const callbacks = useRef({ onMeetingEnded, onChatMessage, onChatHistory, onReaction, onCaption, onForceMute, onWaitingGuest });
+  const handRaisedRef = useRef(false);
+  useEffect(() => {
+    latest.current = { isAudioEnabled, isVideoEnabled, localStream };
+    callbacks.current = { onMeetingEnded, onChatMessage, onChatHistory, onReaction, onCaption, onForceMute, onWaitingGuest };
+  });
 
-  const sendWs = useCallback((message: object) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ ...message, client_id: clientId }));
-    }
-  }, [clientId]);
+  // ─── Socket helpers ───────────────────────────────────────────────────────────
 
-  const updateRemoteStream = useCallback((peerId: string, stream: MediaStream) => {
-    setRemoteStreams(prev => { const n = new Map(prev); n.set(peerId, stream); return n; });
+  const send = useCallback((message: Record<string, unknown>): boolean => {
+    const ws = wsRef.current;
+    if (ws?.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify(message));
+    return true;
   }, []);
 
-  const removeRemoteStream = useCallback((peerId: string) => {
-    setRemoteStreams(prev => { const n = new Map(prev); n.delete(peerId); return n; });
+  const publishRemoteStreams = useCallback(() => {
+    const next = new Map<string, MediaStream>();
+    peersRef.current.forEach((peer, id) => next.set(id, peer.remoteStream));
+    setRemoteStreams(next);
   }, []);
 
-  // ─── RTCPeerConnection factory ────────────────────────────────────────────────
+  // ─── Local media → peer connections ──────────────────────────────────────────
 
-  const createPeerConnection = useCallback((remotePeerId: string): RTCPeerConnection => {
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  const currentTrack = (kind: 'audio' | 'video'): MediaStreamTrack | null => {
+    if (kind === 'video' && screenTrackRef.current) return screenTrackRef.current;
+    const stream = latest.current.localStream;
+    return (kind === 'audio' ? stream?.getAudioTracks()[0] : stream?.getVideoTracks()[0]) ?? null;
+  };
 
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => {
-        const sender = pc.addTrack(track, localStreamRef.current!);
-        // Store video senders so we can replace tracks for screen share
-        if (track.kind === 'video') {
-          screenSendersRef.current.set(remotePeerId, sender);
-        }
-      });
-    }
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        sendWs({ type: 'ice_candidate', to: remotePeerId, from: clientId, candidate: event.candidate.toJSON() });
+  /** Point every audio/video sender at our current tracks. replaceTrack needs no renegotiation. */
+  const attachLocalTracks = useCallback(async (peer: Peer) => {
+    for (const tx of peer.pc.getTransceivers()) {
+      if (tx.currentDirection === 'stopped') continue;
+      const kind = tx.receiver.track.kind as 'audio' | 'video';
+      const track = currentTrack(kind);
+      if (tx.direction !== 'sendrecv') tx.direction = 'sendrecv';
+      if (tx.sender.track !== track) {
+        try { await tx.sender.replaceTrack(track); } catch (err) { console.warn('replaceTrack failed', err); }
       }
+    }
+  }, []);
+
+  // ─── Peer connection lifecycle ───────────────────────────────────────────────
+
+  const closePeer = useCallback((peerId: string) => {
+    const peer = peersRef.current.get(peerId);
+    if (!peer) return;
+    if (peer.disconnectTimer) clearTimeout(peer.disconnectTimer);
+    peer.pc.onicecandidate = null;
+    peer.pc.ontrack = null;
+    peer.pc.onnegotiationneeded = null;
+    peer.pc.onconnectionstatechange = null;
+    peer.pc.close();
+    peersRef.current.delete(peerId);
+    publishRemoteStreams();
+  }, [publishRemoteStreams]);
+
+  const createPeer = useCallback((remoteId: string, initiator: boolean): Peer => {
+    const pc = new RTCPeerConnection({ iceServers: iceServersRef.current });
+    const peer: Peer = {
+      id: remoteId,
+      pc,
+      polite: clientId < remoteId,
+      makingOffer: false,
+      ignoreOffer: false,
+      pendingCandidates: [],
+      chain: Promise.resolve(),
+      remoteStream: new MediaStream(),
+      disconnectTimer: null,
+    };
+    peersRef.current.set(remoteId, peer);
+
+    pc.onicecandidate = ({ candidate }) => {
+      if (candidate) send({ type: 'ice_candidate', to: remoteId, candidate: candidate.toJSON() });
     };
 
-    pc.ontrack = (event) => {
-      const [stream] = event.streams;
-      if (!stream) return;
+    pc.ontrack = ({ track }) => {
+      if (!peer.remoteStream.getTracks().includes(track)) peer.remoteStream.addTrack(track);
+      publishRemoteStreams();
+    };
 
-      // Distinguish screen-share tracks from camera tracks by label prefix we set on sender side
-      // We rely on a dedicated stream per track kind; if it's a screen track we'll get notified
-      // via 'screen_share_started' WS message before this fires — just update the stream map.
-      updateRemoteStream(remotePeerId, stream);
+    pc.onnegotiationneeded = async () => {
+      try {
+        peer.makingOffer = true;
+        await pc.setLocalDescription();
+        const d = pc.localDescription;
+        if (d) send({ type: d.type, to: remoteId, sdp: d.sdp });
+      } catch (err) {
+        console.warn('Negotiation failed', err);
+      } finally {
+        peer.makingOffer = false;
+      }
     };
 
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-        removeRemoteStream(remotePeerId);
+      if (peer.disconnectTimer) { clearTimeout(peer.disconnectTimer); peer.disconnectTimer = null; }
+      if (pc.connectionState === 'failed') {
+        pc.restartIce();
+      } else if (pc.connectionState === 'disconnected') {
+        // Often self-heals within seconds; restart ICE if it does not.
+        peer.disconnectTimer = setTimeout(() => {
+          if (pc.connectionState === 'disconnected') pc.restartIce();
+        }, 4000);
       }
     };
 
-    peerConnections.current.set(remotePeerId, pc);
-    return pc;
-  }, [clientId, sendWs, updateRemoteStream, removeRemoteStream]);
-
-  const closePeerConnection = useCallback((peerId: string) => {
-    const pc = peerConnections.current.get(peerId);
-    if (pc) {
-      pc.ontrack = null; pc.onicecandidate = null; pc.onconnectionstatechange = null;
-      pc.close();
-      peerConnections.current.delete(peerId);
+    if (initiator) {
+      // Creating transceivers (with whatever tracks we have now) triggers the first offer.
+      // Always create both so a user without a camera/mic can still receive media.
+      (['audio', 'video'] as const).forEach(kind => {
+        const track = currentTrack(kind);
+        if (track) pc.addTransceiver(track, { direction: 'sendrecv' });
+        else pc.addTransceiver(kind, { direction: 'sendrecv' });
+      });
     }
-    screenSendersRef.current.delete(peerId);
-    removeRemoteStream(peerId);
-  }, [removeRemoteStream]);
+    return peer;
+  }, [clientId, send, publishRemoteStreams]);
 
-  // ─── Screen share: replace video track on all peer connections ────────────────
+  const isHealthy = (peer: Peer) =>
+    !['failed', 'closed'].includes(peer.pc.connectionState) && peer.pc.signalingState !== 'closed';
 
-  const startScreenShare = useCallback(async (): Promise<MediaStream | null> => {
-    try {
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-      const screenVideoTrack = screenStream.getVideoTracks()[0];
+  const enqueue = (peer: Peer, task: () => Promise<void>) => {
+    peer.chain = peer.chain.then(task).catch(err => console.warn('Signaling error', err));
+  };
 
-      // Replace the video track on every existing peer connection
-      for (const [peerId, pc] of peerConnections.current) {
-        const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-        if (sender) {
-          await sender.replaceTrack(screenVideoTrack);
-          screenSendersRef.current.set(peerId, sender);
-        }
+  const handleDescription = useCallback((from: string, type: 'offer' | 'answer', sdp: string) => {
+    let peer = peersRef.current.get(from);
+    if (!peer) {
+      if (type !== 'offer') return;
+      peer = createPeer(from, false);
+    }
+    const p = peer;
+    enqueue(p, async () => {
+      const { pc } = p;
+      if (type === 'answer' && pc.signalingState !== 'have-local-offer') return; // stale answer
+      const collision = type === 'offer' && (p.makingOffer || pc.signalingState !== 'stable');
+      p.ignoreOffer = !p.polite && collision;
+      if (p.ignoreOffer) return;
+
+      await pc.setRemoteDescription({ type, sdp }); // a polite peer rolls back its own offer implicitly
+      for (const candidate of p.pendingCandidates.splice(0)) {
+        try { await pc.addIceCandidate(candidate); } catch (err) { console.warn('Queued ICE candidate rejected', err); }
       }
+      if (type === 'offer') {
+        await attachLocalTracks(p);
+        await pc.setLocalDescription();
+        const d = pc.localDescription;
+        if (d) send({ type: 'answer', to: from, sdp: d.sdp });
+      }
+    });
+  }, [createPeer, attachLocalTracks, send]);
 
-      // When the OS "Stop sharing" button is clicked
-      screenVideoTrack.onended = () => stopScreenShare(screenStream);
-
-      // Notify peers we're screen sharing
-      sendWs({ type: 'screen_share_started', from: clientId, display_name: displayName });
-
-      return screenStream;
-    } catch (err) {
-      console.error('Screen share error', err);
-      return null;
-    }
-  }, [clientId, displayName, sendWs]);
-
-  const stopScreenShare = useCallback(async (screenStream?: MediaStream) => {
-    // Stop screen tracks
-    screenStream?.getTracks().forEach(t => t.stop());
-
-    // Swap back to webcam video track on all peer connections
-    const camTrack = localStreamRef.current?.getVideoTracks()[0] ?? null;
-    for (const pc of peerConnections.current.values()) {
-      const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-      if (sender) await sender.replaceTrack(camTrack);
-    }
-
-    sendWs({ type: 'screen_share_stopped', from: clientId });
-    setScreenShareState(null);
-  }, [clientId, sendWs]);
-
-  // ─── Signaling ────────────────────────────────────────────────────────────────
-
-  const handleOffer = useCallback(async (data: { from: string; sdp: RTCSessionDescriptionInit }) => {
-    let pc = peerConnections.current.get(data.from);
-    if (!pc) pc = createPeerConnection(data.from);
-    await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    sendWs({ type: 'answer', to: data.from, from: clientId, sdp: pc.localDescription });
-  }, [clientId, createPeerConnection, sendWs]);
-
-  const handleAnswer = useCallback(async (data: { from: string; sdp: RTCSessionDescriptionInit }) => {
-    const pc = peerConnections.current.get(data.from);
-    if (pc && pc.signalingState !== 'stable') {
-      await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-    }
+  const handleCandidate = useCallback((from: string, candidate: RTCIceCandidateInit) => {
+    const peer = peersRef.current.get(from);
+    if (!peer) return;
+    enqueue(peer, async () => {
+      if (!peer.pc.remoteDescription) { peer.pendingCandidates.push(candidate); return; }
+      try { await peer.pc.addIceCandidate(candidate); }
+      catch (err) { if (!peer.ignoreOffer) console.warn('ICE candidate rejected', err); }
+    });
   }, []);
 
-  const handleIceCandidate = useCallback(async (data: { from: string; candidate: RTCIceCandidateInit }) => {
-    const pc = peerConnections.current.get(data.from);
-    if (pc) {
-      try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
-      catch (e) { console.warn('ICE candidate error', e); }
+  // ─── Incoming socket messages ────────────────────────────────────────────────
+
+  const mergeParticipant = (list: RemoteParticipant[], incoming: Partial<RemoteParticipant> & { client_id: string }) => {
+    const exists = list.some(p => p.client_id === incoming.client_id);
+    if (!exists) {
+      return [...list, {
+        id: null, display_name: 'Guest', is_host: false, is_muted: false, camera_enabled: false, ...incoming,
+      } as RemoteParticipant];
     }
-  }, []);
+    return list.map(p => (p.client_id === incoming.client_id ? { ...p, ...incoming } : p));
+  };
 
-  const initiateCallTo = useCallback(async (remotePeerId: string) => {
-    if (peerConnections.current.has(remotePeerId)) return;
-    const pc = createPeerConnection(remotePeerId);
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    sendWs({ type: 'offer', to: remotePeerId, from: clientId, sdp: pc.localDescription });
-  }, [clientId, createPeerConnection, sendWs]);
+  const handleMessage = useCallback((data: Record<string, unknown>) => {
+    switch (data.type) {
+      case 'waiting':
+        setStatus('waiting');
+        break;
+      case 'joined': {
+        // Authoritative roster: also runs after every reconnect.
+        const roster = (data.participants as RemoteParticipant[]) ?? [];
+        setSelf((data.you as { is_host: boolean; is_cohost: boolean }) ?? { is_host: false, is_cohost: false });
+        setRoomState((data.state as RoomState) ?? { locked: false, waiting_room: false });
+        callbacks.current.onChatHistory?.((data.chat_history as ChatEvent[]) ?? []);
+        setRemoteParticipants(roster);
+        const ids = new Set(roster.map(p => p.client_id));
+        peersRef.current.forEach((_, id) => { if (!ids.has(id)) closePeer(id); });
+        for (const p of roster) {
+          const existing = peersRef.current.get(p.client_id);
+          if (existing && isHealthy(existing)) continue;
+          if (existing) closePeer(p.client_id);
+          createPeer(p.client_id, true); // we are the newcomer: we place the call
+        }
+        publishRemoteStreams();
+        setStatus('connected');
+        break;
+      }
+      case 'participant_joined': {
+        const p = data.participant as RemoteParticipant;
+        if (!p || p.client_id === clientId) break;
+        setRemoteParticipants(prev => mergeParticipant(prev, p));
+        // They will call us; if we still hold a dead connection from a previous session, drop it.
+        const existing = peersRef.current.get(p.client_id);
+        if (existing && !isHealthy(existing)) closePeer(p.client_id);
+        break;
+      }
+      case 'participant_updated': {
+        const p = data.participant as Partial<RemoteParticipant> & { client_id: string };
+        if (p?.client_id === clientId) {
+          // Changes made to us by someone else: promotion to co-host, hand lowered by a host.
+          if (typeof p.is_cohost === 'boolean') setSelf(prev => ({ ...prev, is_cohost: p.is_cohost! }));
+          if (p.hand_raised === false) { handRaisedRef.current = false; setHandRaisedState(false); }
+        } else if (p?.client_id) {
+          setRemoteParticipants(prev => mergeParticipant(prev, p));
+        }
+        break;
+      }
+      case 'meeting_state':
+        setRoomState(data.state as RoomState);
+        break;
+      case 'waiting_list': {
+        const list = (data.participants as WaitingGuest[]) ?? [];
+        setWaitingList(prev => {
+          list.filter(g => !prev.some(p => p.client_id === g.client_id)).forEach(g => callbacks.current.onWaitingGuest?.(g));
+          return list;
+        });
+        break;
+      }
+      case 'reaction':
+        callbacks.current.onReaction?.(data.client_id as string, data.emoji as string);
+        break;
+      case 'caption':
+        callbacks.current.onCaption?.(data.client_id as string, data.sender as string, data.text as string, !!data.final);
+        break;
+      case 'participant_left': {
+        const id = data.client_id as string;
+        setRemoteParticipants(prev => prev.filter(p => p.client_id !== id));
+        closePeer(id);
+        break;
+      }
+      case 'offer':
+      case 'answer':
+        handleDescription(data.from as string, data.type, data.sdp as string);
+        break;
+      case 'ice_candidate':
+        handleCandidate(data.from as string, data.candidate as RTCIceCandidateInit);
+        break;
+      case 'chat_message':
+        callbacks.current.onChatMessage?.(data as unknown as ChatEvent);
+        break;
+      case 'force_mute':
+        callbacks.current.onForceMute?.();
+        break;
+      case 'meeting_ended':
+        callbacks.current.onMeetingEnded?.('ended');
+        break;
+    }
+  }, [clientId, closePeer, createPeer, handleDescription, handleCandidate, publishRemoteStreams]);
 
-  // ─── WebSocket lifecycle ──────────────────────────────────────────────────────
+  // ─── WebSocket lifecycle with reconnection ───────────────────────────────────
 
   useEffect(() => {
-    unmountedRef.current = false;
+    let disposed = false;
+    let attempt = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let pingTimer: ReturnType<typeof setInterval> | null = null;
+    let lastMessageAt = Date.now();
+
+    const stopTimers = () => {
+      if (pingTimer) clearInterval(pingTimer);
+      pingTimer = null;
+    };
+
+    const scheduleReconnect = () => {
+      if (disposed || reconnectTimer) return;
+      const delay = Math.min(1000 * 2 ** attempt, MAX_BACKOFF_MS) + Math.random() * 500;
+      attempt += 1;
+      reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay);
+    };
 
     function connect() {
-      if (unmountedRef.current || wsRef.current) return;
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
-      let wsUrl: string;
-      if (backendUrl) {
-        // Remove trailing slash if present
-        const cleanBackendUrl = backendUrl.replace(/\/$/, '');
-        // Force wss:// if the current page is HTTPS to prevent Mixed Content errors
-        const isHttps = window.location.protocol === 'https:';
-        wsUrl = cleanBackendUrl.replace(/^https?:\/\//, isHttps ? 'wss://' : 'ws://') + `/ws/meetings/${meetingId}`;
-      } else {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        wsUrl = `${protocol}//${window.location.host}/ws/meetings/${meetingId}`;
-      }
-      const ws = new WebSocket(wsUrl);
+      if (disposed) return;
+      if (attempt > 0) setStatus('reconnecting');
+      const ws = new WebSocket(getMeetingSocketUrl(meetingId, clientId, ticket));
+      wsRef.current = ws;
 
       ws.onopen = () => {
-        setIsConnected(true);
+        attempt = 0;
+        lastMessageAt = Date.now();
+        const l = latest.current;
+        // Identity and role come from the signed ticket; we only report our media state.
         ws.send(JSON.stringify({
-          type: 'participant_joined',
-          client_id: clientId,
-          participant: {
-            id: participantId, client_id: clientId, display_name: displayName,
-            is_host: isHost, is_muted: !isAudioEnabled, camera_enabled: isVideoEnabled,
-          },
+          type: 'join',
+          is_muted: !l.isAudioEnabled,
+          camera_enabled: l.isVideoEnabled,
+          is_screen_sharing: !!screenTrackRef.current,
         }));
+        stopTimers();
+        pingTimer = setInterval(() => {
+          if (Date.now() - lastMessageAt > STALE_AFTER_MS) { ws.close(); return; }
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
+        }, PING_INTERVAL_MS);
       };
 
-      ws.onmessage = async (event) => {
+      ws.onmessage = (event) => {
+        lastMessageAt = Date.now();
         let data: Record<string, unknown>;
         try { data = JSON.parse(event.data); } catch { return; }
-        const type = data.type as string;
-
-        if (type === 'participant_joined') {
-          const p = data.participant as RemoteParticipant;
-          if (!p || p.client_id === clientId) return;
-          setRemoteParticipants(prev => prev.find(x => x.client_id === p.client_id) ? prev : [...prev, p]);
-          await initiateCallTo(p.client_id);
-
-        } else if (type === 'participant_left') {
-          const pid = data.participant_id as string | number;
-          setRemoteParticipants(prev => {
-            const leaving = prev.find(p => p.id === pid);
-            if (leaving) closePeerConnection(leaving.client_id);
-            return prev.filter(p => p.id !== pid);
-          });
-
-        } else if (type === 'participant_updated') {
-          const updated = data.participant as Partial<RemoteParticipant>;
-          setRemoteParticipants(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated } : p));
-
-        } else if (type === 'offer') {
-          await handleOffer(data as { from: string; sdp: RTCSessionDescriptionInit });
-        } else if (type === 'answer') {
-          await handleAnswer(data as { from: string; sdp: RTCSessionDescriptionInit });
-        } else if (type === 'ice_candidate') {
-          await handleIceCandidate(data as { from: string; candidate: RTCIceCandidateInit });
-
-        } else if (type === 'screen_share_started') {
-          const sharingClientId = data.from as string;
-          const sharingName = data.display_name as string;
-          // Mark that participant as screen sharing
-          setRemoteParticipants(prev => prev.map(p =>
-            p.client_id === sharingClientId ? { ...p, is_screen_sharing: true } : p
-          ));
-          // The actual stream will arrive via ontrack; listen for it
-          // We store it once it arrives in a separate effect keyed on is_screen_sharing
-          setScreenShareState(prev => {
-            // Optimistically set — stream will be populated via remoteStreams once ontrack fires
-            const stream = remoteStreams.get(sharingClientId);
-            if (stream) return { clientId: sharingClientId, name: sharingName, stream };
-            return prev; // will be set once stream arrives
-          });
-          // Store pending info so ontrack can finish it
-          pendingScreenShareRef.current = { clientId: sharingClientId, name: sharingName };
-
-        } else if (type === 'screen_share_stopped') {
-          const sharingClientId = data.from as string;
-          setRemoteParticipants(prev => prev.map(p =>
-            p.client_id === sharingClientId ? { ...p, is_screen_sharing: false } : p
-          ));
-          setScreenShareState(null);
-          pendingScreenShareRef.current = null;
-
-        } else if (type === 'meeting_ended') {
-          onMeetingEndedRef.current?.();
-        } else if (type === 'chat_message') {
-          onChatMessageRef.current?.({
-            sender: data.sender as string,
-            text: data.text as string,
-            timestamp: data.timestamp as string,
-          });
-        }
+        handleMessage(data);
       };
 
-      ws.onclose = () => {
-        setIsConnected(false);
+      ws.onclose = (event) => {
+        if (wsRef.current !== ws) return; // superseded
         wsRef.current = null;
-        if (!unmountedRef.current) setTimeout(connect, 3000);
+        stopTimers();
+        if (disposed) return;
+        const terminal: Record<number, EndReason> = {
+          [CLOSE_ENDED]: 'ended', [CLOSE_REMOVED]: 'removed', [CLOSE_NOT_FOUND]: 'not_found',
+          [CLOSE_DENIED]: 'denied', [CLOSE_UNAUTHORIZED]: 'unauthorized',
+        };
+        const reason = terminal[event.code];
+        if (reason) {
+          disposed = true;
+          callbacks.current.onMeetingEnded?.(reason);
+          return;
+        }
+        setStatus('reconnecting');
+        scheduleReconnect();
       };
-      ws.onerror = () => ws.close();
-      wsRef.current = ws;
+
+      ws.onerror = () => { /* onclose follows and drives reconnection */ };
     }
 
-    connect();
-
-    return () => {
-      unmountedRef.current = true;
-      peerConnections.current.forEach((_, peerId) => closePeerConnection(peerId));
-      peerConnections.current.clear();
-      if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null; }
+    const reconnectNow = () => {
+      if (disposed) return;
+      const ws = wsRef.current;
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      attempt = 0;
+      connect();
     };
+    const onVisible = () => { if (!document.hidden) reconnectNow(); };
+    window.addEventListener('online', reconnectNow);
+    document.addEventListener('visibilitychange', onVisible);
+
+    loadIceServers().then(servers => {
+      iceServersRef.current = servers;
+      if (!disposed) connect();
+    });
+
+    const peers = peersRef.current;
+    return () => {
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      stopTimers();
+      window.removeEventListener('online', reconnectNow);
+      document.removeEventListener('visibilitychange', onVisible);
+      const ws = wsRef.current;
+      wsRef.current = null;
+      if (ws) {
+        ws.onclose = null;
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'leave' }));
+        ws.close();
+      }
+      Array.from(peers.keys()).forEach(closePeer);
+      screenTrackRef.current?.stop();
+      screenTrackRef.current = null;
+    };
+    // The connection is tied to the meeting + this page's identity only; everything else flows via refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [meetingId]);
+  }, [meetingId, clientId, ticket]);
 
-  // Ref for pending screen share (so ontrack can complete the state)
-  const pendingScreenShareRef = useRef<{ clientId: string; name: string } | null>(null);
+  // ─── Keep peers in sync with local state ─────────────────────────────────────
 
-  // When a remote stream arrives (ontrack), check if it belongs to an active screen sharer
+  // Mic / camera state → everyone else
   useEffect(() => {
-    const pending = pendingScreenShareRef.current;
-    if (!pending) return;
-    const stream = remoteStreams.get(pending.clientId);
-    if (stream) {
-      setScreenShareState({ clientId: pending.clientId, name: pending.name, stream });
+    send({ type: 'update', is_muted: !isAudioEnabled, camera_enabled: isVideoEnabled });
+  }, [isAudioEnabled, isVideoEnabled, send]);
+
+  // A new local stream (e.g. permission granted after a retry) → swap tracks on all peers
+  useEffect(() => {
+    peersRef.current.forEach(peer => { attachLocalTracks(peer); });
+  }, [localStream, attachLocalTracks]);
+
+  // ─── Screen sharing ──────────────────────────────────────────────────────────
+
+  const stopScreenShare = useCallback(async () => {
+    const track = screenTrackRef.current;
+    if (!track) return;
+    screenTrackRef.current = null;
+    track.onended = null;
+    track.stop();
+    setLocalScreenStream(null);
+    await Promise.all(Array.from(peersRef.current.values()).map(attachLocalTracks));
+    send({ type: 'update', is_screen_sharing: false });
+  }, [attachLocalTracks, send]);
+
+  const startScreenShare = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    if (screenTrackRef.current) return { ok: true };
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      return { ok: false, error: 'Screen sharing is not supported on this device or browser.' };
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [remoteStreams]);
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const track = stream.getVideoTracks()[0];
+      screenTrackRef.current = track;
+      track.onended = () => { void stopScreenShare(); }; // browser's own "Stop sharing" button
+      setLocalScreenStream(stream);
+      await Promise.all(Array.from(peersRef.current.values()).map(attachLocalTracks));
+      send({ type: 'update', is_screen_sharing: true });
+      return { ok: true };
+    } catch (err) {
+      if ((err as { name?: string })?.name === 'NotAllowedError') return { ok: false }; // user cancelled the picker
+      return { ok: false, error: 'Could not start screen sharing.' };
+    }
+  }, [attachLocalTracks, send, stopScreenShare]);
 
-  // ─── Mute sync ────────────────────────────────────────────────────────────────
+  // ─── Public API ──────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    localStreamRef.current?.getAudioTracks().forEach(t => { t.enabled = isAudioEnabled; });
-  }, [isAudioEnabled]);
+  const sendChat = useCallback(
+    (text: string, opts?: { to?: string; attachment?: { name: string; size: number; url: string } }) =>
+      send({ type: 'chat_message', text, ...(opts?.to ? { to: opts.to } : {}), ...(opts?.attachment ? { attachment: opts.attachment } : {}) }),
+    [send],
+  );
 
-  useEffect(() => {
-    localStreamRef.current?.getVideoTracks().forEach(t => { t.enabled = isVideoEnabled; });
-  }, [isVideoEnabled]);
+  const setHandRaised = useCallback((raised: boolean) => {
+    handRaisedRef.current = raised;
+    setHandRaisedState(raised);
+    send({ type: 'update', hand_raised: raised });
+  }, [send]);
 
-  // ─── End meeting (host only) ──────────────────────────────────────────────────
+  const sendReaction = useCallback((emoji: string) => send({ type: 'reaction', emoji }), [send]);
+  const sendCaption = useCallback((text: string, final: boolean) => send({ type: 'caption', text, final }), [send]);
 
-  const endMeetingForAll = useCallback(async () => {
-    sendWs({ type: 'meeting_ended' });
-    try { await onEndMeetingRef.current?.(); } catch (e) { console.warn('Failed to mark meeting ended', e); }
-    onMeetingEndedRef.current?.();
-  }, [sendWs]);
+  // Moderation (host and co-hosts; the server re-checks every one of these)
+  const moderation = {
+    admit: (id: string) => send({ type: 'admit', client_id: id }),
+    deny: (id: string) => send({ type: 'deny', client_id: id }),
+    admitAll: () => send({ type: 'admit_all' }),
+    mutePeer: (id: string) => send({ type: 'mute_peer', client_id: id }),
+    muteAll: () => send({ type: 'mute_all' }),
+    remove: (id: string) => send({ type: 'remove', client_id: id }),
+    lowerHand: (id: string) => send({ type: 'lower_hand', client_id: id }),
+    setLock: (locked: boolean) => send({ type: 'set_lock', locked }),
+    setWaitingRoom: (enabled: boolean) => send({ type: 'set_waiting_room', enabled }),
+    makeCohost: (id: string, value: boolean) => send({ type: 'make_cohost', client_id: id, value }),
+  };
 
-  // ─── Public API ───────────────────────────────────────────────────────────────
+  const leave = useCallback(() => {
+    send({ type: 'leave' });
+  }, [send]);
 
-  const sendMessage = useCallback((message: object) => sendWs(message), [sendWs]);
+  const screenSharer = remoteParticipants.find(p => p.is_screen_sharing) ?? null;
 
   return {
     remoteParticipants,
     remoteStreams,
-    screenShareState,   // {clientId, name, stream} | null — remote screen share
-    isConnected,
-    sendMessage,
+    screenSharer,
+    localScreenStream,
+    status,
+    isConnected: status === 'connected',
+    roomState,
+    waitingList,
+    self,
+    handRaised,
+    setHandRaised,
+    sendReaction,
+    sendCaption,
+    moderation,
     startScreenShare,
     stopScreenShare,
-    endMeetingForAll,
+    sendChat,
+    leave,
   };
 }

@@ -69,3 +69,13 @@ Desktop.ini
 *.tmp
 *.bak
 *.pem
+
+# ─── E2E artifacts ───────────────────────────────────────────────────────────────
+e2e/screenshots/
+e2e/debug.mjs
+e2e/camtest.mjs
+*.db
+backend/uploads/
+
+# MediaPipe wasm is copied from node_modules by `npm install` (scripts/copy-mediapipe.mjs)
+frontend/public/mediapipe/wasm/

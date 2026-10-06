@@ -1,24 +1,52 @@
 "use client";
 
 import { useState } from 'react';
-import { X, Copy, CheckCircle, Video, Users } from 'lucide-react';
-import { Meeting } from '@/types';
+import { X, Copy, CheckCircle, Video, Users, ShieldCheck, KeyRound } from 'lucide-react';
+import { Meeting, MeetingSettingsPayload } from '@/types';
 import { toast } from 'react-hot-toast';
+import { buildMeetingLink, copyToClipboard, formatMeetingId } from '@/lib/links';
 
 interface NewMeetingModalProps {
   meeting: Meeting;
   onStart: () => void;
   onClose: () => void;
+  /** Persist security options chosen by the host (waiting room, passcode) */
+  onUpdateSettings?: (settings: MeetingSettingsPayload) => Promise<void>;
 }
 
-export function NewMeetingModal({ meeting, onStart, onClose }: NewMeetingModalProps) {
+export function NewMeetingModal({ meeting, onStart, onClose, onUpdateSettings }: NewMeetingModalProps) {
   const [copied, setCopied] = useState(false);
+  const [waitingRoom, setWaitingRoom] = useState(meeting.waiting_room);
+  const [passcode, setPasscode] = useState('');
+  const [hasPasscode, setHasPasscode] = useState(meeting.has_passcode);
+  const [saving, setSaving] = useState(false);
 
-  const joinUrl = meeting.join_url || `${window.location.origin}/meeting/${meeting.meeting_id}`;
-  const formatId = (id: string) => id.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3');
+  const save = async (settings: MeetingSettingsPayload, onOk?: () => void) => {
+    if (!onUpdateSettings) return;
+    setSaving(true);
+    try {
+      await onUpdateSettings(settings);
+      onOk?.();
+    } catch {
+      toast.error('Could not update the meeting settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+  const savePasscode = () => {
+    const value = passcode.trim();
+    if (value.length < 4) { toast.error('A passcode needs 4 to 16 characters'); return; }
+    void save({ passcode: value }, () => { setHasPasscode(true); setPasscode(''); toast.success('Passcode set. Share it with your guests.'); });
+  };
 
-  const copyLink = () => {
-    navigator.clipboard.writeText(joinUrl);
+  const joinUrl = buildMeetingLink(meeting.meeting_id);
+  const formatId = formatMeetingId;
+
+  const copyLink = async () => {
+    if (!(await copyToClipboard(joinUrl))) {
+      toast.error('Could not copy. Select the link and copy it manually.');
+      return;
+    }
     setCopied(true);
     toast.success('Invite link copied!');
     setTimeout(() => setCopied(false), 2000);
@@ -68,6 +96,43 @@ export function NewMeetingModal({ meeting, onStart, onClose }: NewMeetingModalPr
             </div>
           </div>
         </div>
+
+        {onUpdateSettings && (
+          <div className="px-6 pb-5 space-y-3" data-testid="security-options">
+            <p className="flex items-center gap-2 text-sm font-medium text-slate-700"><ShieldCheck className="w-4 h-4" /> Security</p>
+            <label className="flex items-center justify-between gap-3 text-sm text-slate-700 cursor-pointer">
+              <span>Waiting room <span className="text-slate-400">(you admit each guest)</span></span>
+              <input
+                type="checkbox"
+                data-testid="opt-waiting-room"
+                checked={waitingRoom}
+                disabled={saving}
+                onChange={(e) => { const v = e.target.checked; void save({ waiting_room: v }, () => setWaitingRoom(v)); }}
+                className="w-5 h-5 accent-blue-600"
+              />
+            </label>
+            <div>
+              <p className="flex items-center gap-2 text-sm text-slate-700 mb-1.5"><KeyRound className="w-4 h-4" /> Passcode {hasPasscode && <span className="text-green-600 text-xs font-medium">(set)</span>}</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  data-testid="opt-passcode"
+                  value={passcode}
+                  maxLength={16}
+                  onChange={(e) => setPasscode(e.target.value)}
+                  placeholder={hasPasscode ? 'Enter a new passcode to change it' : 'Optional, 4-16 characters'}
+                  className="flex-1 min-w-0 px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button onClick={savePasscode} disabled={saving || !passcode.trim()} data-testid="opt-passcode-save"
+                  className="px-3 py-2 text-sm font-medium bg-slate-100 hover:bg-slate-200 rounded-lg disabled:opacity-50">Set</button>
+                {hasPasscode && (
+                  <button onClick={() => void save({ clear_passcode: true }, () => setHasPasscode(false))} disabled={saving}
+                    className="px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg">Remove</button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="flex gap-3 px-6 pb-6">
           <button

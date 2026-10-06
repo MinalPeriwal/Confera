@@ -27,6 +27,7 @@ class ParticipantBase(BaseModel):
 class ParticipantCreate(BaseModel):
     display_name: str
     is_host: bool = False
+    passcode: Optional[str] = None
 
     @field_validator('display_name')
     @classmethod
@@ -53,6 +54,8 @@ class MeetingBase(BaseModel):
 
 class MeetingCreate(MeetingBase):
     instant: bool = False
+    passcode: Optional[str] = Field(default=None, min_length=4, max_length=16)
+    waiting_room: bool = False
 
     @model_validator(mode='after')
     def validate_meeting(self):
@@ -79,7 +82,17 @@ class Meeting(MeetingBase):
     status: str
     created_at: datetime
     host_clerk_id: Optional[str] = None
+    waiting_room: bool = False
+    locked: bool = False
+    has_passcode: bool = False
     participants: List[Participant] = []
 
     class Config:
         from_attributes = True
+
+
+class MeetingSettings(BaseModel):
+    waiting_room: Optional[bool] = None
+    locked: Optional[bool] = None
+    passcode: Optional[str] = Field(default=None, min_length=4, max_length=16)
+    clear_passcode: bool = False

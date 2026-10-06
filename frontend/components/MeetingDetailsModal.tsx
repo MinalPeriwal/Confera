@@ -4,6 +4,7 @@ import { Meeting } from '@/types';
 import { X, Calendar, Clock, Users, Video, Copy, Play, CheckCircle, Shield } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { useState } from 'react';
+import { buildMeetingLink, copyToClipboard } from '@/lib/links';
 
 interface MeetingDetailsModalProps {
   isOpen: boolean;
@@ -31,9 +32,11 @@ export function MeetingDetailsModal({ isOpen, onClose, meeting, onJoin }: Meetin
   const participantCount = meeting.participants?.length ?? 0;
   const formatId = (id: string) => id.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3');
 
-  const copyLink = () => {
-    const url = meeting.join_url || `${window.location.origin}/meeting/${meeting.meeting_id}`;
-    navigator.clipboard.writeText(url);
+  const copyLink = async () => {
+    if (!(await copyToClipboard(buildMeetingLink(meeting.meeting_id)))) {
+      toast.error('Could not copy the link');
+      return;
+    }
     setCopied(true);
     toast.success('Invite link copied!');
     setTimeout(() => setCopied(false), 2000);

@@ -1,6 +1,7 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
 
-const isProtectedRoute = createRouteMatcher(['/dashboard(.*)', '/meeting(.*)']);
+// /meeting/* is intentionally public: anyone holding a meeting link can join as a guest.
+const isProtectedRoute = createRouteMatcher(['/dashboard(.*)']);
 
 export const proxy = clerkMiddleware(async (auth, req) => {
   if (isProtectedRoute(req)) {

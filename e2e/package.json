@@ -1,0 +1,7 @@
+{
+  "name": "confera-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node meeting.e2e.mjs" },
+  "dependencies": { "playwright-core": "^1.49.0" }
+}

@@ -25,6 +25,9 @@ export interface Meeting {
   host_id: number;
   host_name: string;
   host_clerk_id?: string;
+  waiting_room: boolean;
+  locked: boolean;
+  has_passcode: boolean;
   scheduled_at: string | null;
   duration_minutes: number;
   join_url: string;
@@ -40,4 +43,28 @@ export interface MeetingCreatePayload {
   duration_minutes?: number;
   instant?: boolean;
   host_name?: string;
+  passcode?: string;
+  waiting_room?: boolean;
+}
+
+export interface MeetingSettingsPayload {
+  waiting_room?: boolean;
+  locked?: boolean;
+  passcode?: string;
+  clear_passcode?: boolean;
+}
+
+export interface JoinResponse {
+  participant_id: number;
+  meeting: Meeting;
+  is_host: boolean;
+  /** Signed credential required to open the meeting WebSocket and upload files. */
+  ticket: string;
+}
+
+export interface SharedFile {
+  id: string;
+  name: string;
+  size: number;
+  url: string;
 }

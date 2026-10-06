@@ -4,6 +4,7 @@ import { Meeting } from '@/types';
 import { Calendar, Clock, Video, Users, Copy, Play, ExternalLink, CheckCircle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { useState } from 'react';
+import { buildMeetingLink, copyToClipboard } from '@/lib/links';
 
 interface MeetingCardProps {
   meeting: Meeting;
@@ -79,8 +80,11 @@ export function MeetingCard({ meeting, type, onJoin, onViewDetails }: MeetingCar
 
   const formatId = (id: string) => id.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3');
 
-  const copyLink = () => {
-    navigator.clipboard.writeText(meeting.join_url || window.location.origin + `/meeting/${meeting.meeting_id}`);
+  const copyLink = async () => {
+    if (!(await copyToClipboard(buildMeetingLink(meeting.meeting_id)))) {
+      toast.error('Could not copy the link');
+      return;
+    }
     setCopied(true);
     toast.success('Invite link copied!');
     setTimeout(() => setCopied(false), 2000);

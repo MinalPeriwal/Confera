@@ -1,11 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from typing import Optional
 from sqlalchemy.orm import Session
 from typing import List
 from pydantic import BaseModel
 
 from .. import crud, models, schemas
 from ..database import get_db
-from ..auth import get_current_user
+from ..auth import get_current_user, get_optional_user
+from ..connection_manager import manager
+from ..files import delete_meeting_files
+from ..security import check_passcode, hash_passcode, make_ticket, rate_limit
+from .. import room_service
 
 router = APIRouter()
 
@@ -43,17 +48,43 @@ def read_meeting(meeting_id: str, db: Session = Depends(get_db)):
     return meeting
 
 @router.post("/{meeting_id}/join", response_model=dict)
-def join_meeting(meeting_id: str, participant: schemas.ParticipantCreate, db: Session = Depends(get_db)):
+def join_meeting(
+    meeting_id: str,
+    participant: schemas.ParticipantCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: Optional[models.User] = Depends(get_optional_user),
+):
+    rate_limit(request, "join", limit=30)
     meeting = crud.get_meeting(db, meeting_id=meeting_id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
-    
-    db_participant = crud.create_participant(db=db, meeting_id=meeting.id, participant=participant)
+    if meeting.status == "ended":
+        raise HTTPException(status_code=410, detail="This meeting has ended")
+
+    # Hosting is decided server-side from the authenticated user, never from the request body.
+    is_host = bool(user and meeting.host_id == user.id)
+    if not is_host:
+        if meeting.locked:
+            raise HTTPException(status_code=423, detail="This meeting is locked by the host")
+        if not check_passcode(participant.passcode, meeting.passcode_hash):
+            raise HTTPException(status_code=403, detail="Incorrect passcode")
+
+    if meeting.status == "scheduled":
+        meeting.status = "active"
+        db.commit()
+        db.refresh(meeting)
+
+    clean = participant.model_copy(update={"is_host": is_host, "display_name": participant.display_name.strip()[:60]})
+    needs_admission = bool(meeting.waiting_room) and not is_host
+    db_participant = crud.create_participant(db=db, meeting_id=meeting.id, participant=clean, admitted=not needs_admission)
     return {
         "meeting": schemas.Meeting.model_validate(meeting).model_dump(),
         "participant": schemas.Participant.model_validate(db_participant).model_dump(),
         "participant_id": db_participant.id,
-        "meeting_id": meeting.meeting_id
+        "meeting_id": meeting.meeting_id,
+        "is_host": is_host,
+        "ticket": make_ticket(meeting.meeting_id, db_participant.id, clean.display_name, is_host),
     }
 
 class LeaveMeetingRequest(BaseModel):
@@ -77,30 +108,53 @@ def get_participants(meeting_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Meeting not found")
     return crud.get_active_participants(db, meeting_id=meeting.id)
 
-@router.delete("/{meeting_id}/participants/{participant_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_participant(meeting_id: str, participant_id: int, db: Session = Depends(get_db)):
+def _get_hosted_meeting(db: Session, meeting_id: str, current_user: models.User) -> models.Meeting:
     meeting = crud.get_meeting(db, meeting_id=meeting_id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
-        
-    db_participant = crud.remove_participant(db, participant_id=participant_id)
-    if not db_participant:
-        raise HTTPException(status_code=404, detail="Participant not found")
+    if meeting.host_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only the host can do this")
+    return meeting
+
+@router.delete("/{meeting_id}/participants/{participant_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_participant(meeting_id: str, participant_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    meeting = _get_hosted_meeting(db, meeting_id, current_user)
+    await manager.remove_participant(meeting.meeting_id, participant_id)
+    crud.leave_participant(db, participant_id=participant_id)
     return None
 
+@router.patch("/{meeting_id}/settings", response_model=schemas.Meeting)
+async def update_settings(
+    meeting_id: str,
+    settings: schemas.MeetingSettings,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    meeting = _get_hosted_meeting(db, meeting_id, current_user)
+    if settings.passcode:
+        meeting.passcode_hash = hash_passcode(settings.passcode)
+    elif settings.clear_passcode:
+        meeting.passcode_hash = None
+    if settings.waiting_room is not None:
+        meeting.waiting_room = settings.waiting_room
+    if settings.locked is not None:
+        meeting.locked = settings.locked
+    db.commit()
+    db.refresh(meeting)
+    await room_service.apply_settings(meeting.meeting_id, locked=settings.locked, waiting_room=settings.waiting_room)
+    return meeting
+
 @router.post("/{meeting_id}/mute-all")
-def mute_all_participants(meeting_id: str, db: Session = Depends(get_db)):
-    meeting = crud.get_meeting(db, meeting_id=meeting_id)
-    if not meeting:
-        raise HTTPException(status_code=404, detail="Meeting not found")
-        
+async def mute_all_participants(meeting_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    meeting = _get_hosted_meeting(db, meeting_id, current_user)
     participants = crud.mute_all_participants(db, meeting_id=meeting.id)
+    await manager.mute_all(meeting.meeting_id)
     return {"message": "All participants muted", "count": len(participants)}
 
 from datetime import datetime, timezone
 
 @router.patch("/{meeting_id}/end", response_model=schemas.Meeting)
-def end_meeting(meeting_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+def end_meeting(meeting_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     meeting = crud.get_meeting(db, meeting_id=meeting_id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
@@ -123,7 +177,10 @@ def end_meeting(meeting_id: str, db: Session = Depends(get_db), current_user: mo
 
         db.commit()
         db.refresh(meeting)
-        
+
+    # Notify everyone still connected and tear the room down.
+    background_tasks.add_task(manager.end_meeting, meeting.meeting_id)
+    background_tasks.add_task(delete_meeting_files, meeting.meeting_id)
     return meeting
 
 @router.delete("/{meeting_id}", status_code=status.HTTP_204_NO_CONTENT)

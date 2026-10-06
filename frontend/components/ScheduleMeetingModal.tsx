@@ -16,6 +16,8 @@ export function ScheduleMeetingModal({ isOpen, onClose, onSchedule }: ScheduleMe
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [duration, setDuration] = useState('60');
+  const [waitingRoom, setWaitingRoom] = useState(false);
+  const [passcode, setPasscode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -25,6 +27,10 @@ export function ScheduleMeetingModal({ isOpen, onClose, onSchedule }: ScheduleMe
     e.preventDefault();
     if (!title.trim() || !date || !time || !duration) {
       setError('Please fill in all required fields');
+      return;
+    }
+    if (passcode.trim() && (passcode.trim().length < 4 || passcode.trim().length > 16)) {
+      setError('A passcode needs 4 to 16 characters');
       return;
     }
 
@@ -39,6 +45,8 @@ export function ScheduleMeetingModal({ isOpen, onClose, onSchedule }: ScheduleMe
         description,
         scheduled_at: scheduledDateTime,
         duration_minutes: parseInt(duration, 10),
+        waiting_room: waitingRoom,
+        passcode: passcode.trim() || undefined,
         instant: false,
         host_name: user?.fullName || "User"
       });
@@ -135,6 +143,22 @@ export function ScheduleMeetingModal({ isOpen, onClose, onSchedule }: ScheduleMe
                 <option value="90">1.5 hours</option>
                 <option value="120">2 hours</option>
               </select>
+            </div>
+
+            <div className="pt-1 space-y-3 border-t border-slate-100">
+              <p className="text-sm font-medium text-slate-700 pt-3">Security</p>
+              <label className="flex items-center justify-between gap-3 text-sm text-slate-700 cursor-pointer">
+                <span>Waiting room <span className="text-slate-400">(you admit each guest)</span></span>
+                <input type="checkbox" checked={waitingRoom} onChange={(e) => setWaitingRoom(e.target.checked)} className="w-5 h-5 accent-blue-600" />
+              </label>
+              <input
+                type="text"
+                value={passcode}
+                maxLength={16}
+                onChange={(e) => setPasscode(e.target.value)}
+                placeholder="Passcode (optional, 4-16 characters)"
+                className="w-full px-4 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+              />
             </div>
           </div>
 

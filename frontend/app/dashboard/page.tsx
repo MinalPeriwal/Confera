@@ -193,6 +193,10 @@ export default function Home() {
           meeting={newMeeting}
           onStart={() => router.push(`/meeting/${newMeeting.meeting_id}`)}
           onClose={() => setNewMeeting(null)}
+          onUpdateSettings={async (settings) => {
+            const updated = await (await getApi()).updateSettings(newMeeting.meeting_id, settings);
+            setNewMeeting(updated);
+          }}
         />
       )}
     </>

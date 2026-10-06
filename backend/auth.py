@@ -8,6 +8,7 @@ from .database import get_db
 from . import crud, models, schemas
 
 bearer_scheme = HTTPBearer()
+optional_bearer_scheme = HTTPBearer(auto_error=False)
 
 _jwks_cache: dict | None = None
 
@@ -78,3 +79,16 @@ def get_current_user(
             db.refresh(user)
 
     return user
+
+
+def get_optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_bearer_scheme),
+    db: Session = Depends(get_db),
+) -> models.User | None:
+    """The signed-in user if a valid token is sent, otherwise None (guests are allowed)."""
+    if credentials is None:
+        return None
+    try:
+        return get_current_user(credentials, db)
+    except Exception:
+        return None
